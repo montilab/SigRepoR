@@ -176,15 +176,18 @@ delete_table_sql <- function(
 
 #' Build the WHERE clause lookup_table_sql() sends to the database
 #'
-#' Every filter compares the bare column, `col IN ('a', 'b')`. Wrapping the
-#' column as `trim(lower(col))` stops MySQL from using its index: looking up
-#' one signature's features in signature_feature_set took 1.31 s as a full
-#' scan of 1.3 million rows, and 0.002 s through the index. Matching stays
-#' case-insensitive and ignores trailing spaces because every filtered text
-#' column uses a case-insensitive, PAD SPACE collation (utf8mb3_unicode_ci);
-#' values supplied by callers are still trimmed here. Values are quoted in one
-#' vectorised DBI::dbQuoteString() call -- quoting them one at a time cost
-#' 0.9 s per 15,000 feature ids.
+#' Every filter is a pair of predicates on the same quoted values:
+#' `(col IN ('a', 'b') AND trim(lower(col)) IN ('a', 'b'))`. The bare
+#' predicate lets MySQL use the column's index -- `trim(lower(col))` alone
+#' forces a full scan: looking up one signature's features in
+#' signature_feature_set took 1.31 s scanning 1.3 million rows, and 0.002 s
+#' through the index. The original `trim(lower(col))` predicate keeps the
+#' original matching semantics exactly: on its own the bare predicate would
+#' also match integer columns against strings such as '1abc', '01' or '1.0'
+#' through MySQL's string-to-number conversion. It only runs on the rows the
+#' index returns. Values are prepared as before (lower-cased, then trimmed)
+#' and quoted in one vectorised DBI::dbQuoteString() call -- quoting them one
+#' at a time cost 0.9 s per 15,000 feature ids.
 #'
 #' @param conn A DBI connection (or DBI::ANSI()) used to quote values.
 #' @param filter_coln_var Column names to filter on.
@@ -198,27 +201,26 @@ build_lookup_where_clause <- function(conn, filter_coln_var, filter_coln_val, fi
   clauses <- base::vapply(
     base::seq_along(filter_coln_var),
     function(s){
-      values <- base::trimws(base::as.character(filter_coln_val[[filter_coln_var[s]]]))
+      values <- base::trimws(base::tolower(filter_coln_val[[filter_coln_var[s]]]))
       if(base::length(values) == 0){
         # A filter column with zero values can never match a row -- emit an
         # explicit always-false clause rather than invalid `IN ()` SQL. ####
         return("1 = 0")
       }
-      quoted_vals <- base::as.character(DBI::dbQuoteString(conn, values))
-      base::sprintf("%s IN (%s)", filter_coln_var[s], base::paste0(quoted_vals, collapse = ", "))
+      value_list <- base::paste0(base::as.character(DBI::dbQuoteString(conn, values)), collapse = ", ")
+      # The bare predicate lets MySQL use the index; the trim(lower()) one
+      # keeps the original matching on the rows the index returns. ####
+      base::sprintf("(%1$s IN (%2$s) AND trim(lower(%1$s)) IN (%2$s))", filter_coln_var[s], value_list)
     },
     base::character(1)
   )
 
-  if(base::length(clauses) > 1){
-    joined <- clauses[1]
-    for(s in base::seq_len(base::length(clauses) - 1)){
-      joined <- base::paste0(joined, " ", filter_var_by[s], " ", clauses[s + 1])
-    }
-    return(joined)
+  # Join the filters with their logical operators: a1 op1 a2 op2 a3 ... ####
+  n <- base::length(clauses)
+  if(n > 1){
+    clauses[-n] <- base::paste(clauses[-n], filter_var_by[base::seq_len(n - 1)])
   }
-
-  clauses
+  base::paste(clauses, collapse = " ")
 }
 
 #' @title lookup_table_sql
@@ -300,8 +302,11 @@ lookup_table_sql <- function(
     # Create a where clause to look up values. Values are escaped with
     # DBI::dbQuoteString() (rather than pasted into the statement with manual
     # quotes) since filter_coln_val routinely carries caller-supplied search
-    # text -- unescaped interpolation here would be SQL injectable. Columns
-    # are compared bare so MySQL can use their indexes; see
+    # text -- unescaped interpolation here would be SQL injectable. Each
+    # filter pairs a bare-column predicate, which lets MySQL use the index,
+    # with the original trim(lower(col)) predicate, which keeps the original
+    # matching exactly (a bare integer column would also match strings such
+    # as '1abc') and only runs on the rows the index returns; see
     # build_lookup_where_clause(). ####
     where_clause <- base::paste0(
       "WHERE ",
