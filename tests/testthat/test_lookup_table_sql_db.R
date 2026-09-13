@@ -42,7 +42,7 @@ test_that("a lookup by signature_id uses the index instead of scanning signature
   test_conn <- skip_unless_test_database()
   conn <- open_test_connection(test_conn)
 
-  one <- DBI::dbGetQuery(conn, "SELECT signature_id FROM signature_feature_set LIMIT 1")
+  one <- DBI::dbGetQuery(conn, "SELECT CAST(signature_id AS CHAR) AS signature_id FROM signature_feature_set LIMIT 1")
   testthat::skip_if(base::nrow(one) == 0, "the test database has no signature features")
 
   clause <- SigRepo:::build_lookup_where_clause(
