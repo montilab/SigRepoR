@@ -142,6 +142,32 @@ sanitizeRetrievedSignature <- function(signature, direction_type){
   signature
 }
 
+# signature_feature_set stores only feature_id, so a retrieved signature's
+# feature_name carries the reference table's spelling, while the difexp keeps
+# the uploaded spelling. Uploads match features case-insensitively, so the two
+# can differ only in case, and OmicSignature$new() then rejects the pair. Where
+# a signature name is missing from the difexp but the difexp row with the same
+# probe_id has the same name ignoring case, use the difexp spelling.
+alignSignatureFeatureNames <- function(signature, difexp){
+  key_columns <- c("probe_id", "feature_name")
+  if(base::is.null(difexp) ||
+     !base::all(key_columns %in% base::colnames(signature)) ||
+     !base::all(key_columns %in% base::colnames(difexp))){
+    return(signature)
+  }
+
+  mismatched <- base::which(!signature$feature_name %in% difexp$feature_name)
+  if(base::length(mismatched) == 0) return(signature)
+
+  difexp_names <- base::as.character(difexp$feature_name)[
+    base::match(signature$probe_id[mismatched], difexp$probe_id)
+  ]
+  same_name <- (base::tolower(difexp_names) == base::tolower(signature$feature_name[mismatched])) %in% TRUE
+  signature$feature_name[mismatched[same_name]] <- difexp_names[same_name]
+
+  signature
+}
+
 #' @title createOmicSignature
 #' @description Get the signature set uploaded by a specific user in the database.
 #' @param conn_handler An R object obtained from SigRepo::newConnhandler() (required)
@@ -171,6 +197,7 @@ createOmicSignature <- function(
   
   # Establish user connection ###
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
   
   # Check user connection and permission ####
   conn_info <- SigRepo::checkPermissions(
@@ -448,6 +475,9 @@ createOmicSignature <- function(
     difexp <- difexp |>
       dplyr::mutate(probe_id = base::as.character(.data$probe_id))
   }
+
+  # Reconcile feature_name spelling between signature and difexp ####
+  signature <- alignSignatureFeatureNames(signature = signature, difexp = difexp)
 
   # Create the OmicSignature object
   OmS <- base::tryCatch({

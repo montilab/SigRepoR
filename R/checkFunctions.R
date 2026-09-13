@@ -220,9 +220,9 @@ checkTableInput <- function(
   table <- base::data.frame(table, stringsAsFactors = FALSE) |> 
     dplyr::mutate_all(function(x){ base::as.character(x) }) |>
     dplyr::mutate_if(base::is.character, function(x){ base::trimws(base::gsub("'", "", x, perl = TRUE)) }) |> 
-    dplyr::mutate_if(base::is.character, function(x){ base::replace(x, base::match("NA", x), "'NULL'") }) |> 
-    dplyr::mutate_if(base::is.character, function(x){ base::replace(x, base::match("NULL", x), "'NULL'") }) |> 
-    dplyr::mutate_if(base::is.character, function(x){ base::replace(x, base::match("", x), "'NULL'") }) |> 
+    dplyr::mutate_if(base::is.character, function(x){ base::replace(x, x %in% "NA", "'NULL'") }) |> 
+    dplyr::mutate_if(base::is.character, function(x){ base::replace(x, x %in% "NULL", "'NULL'") }) |> 
+    dplyr::mutate_if(base::is.character, function(x){ base::replace(x, x %in% "", "'NULL'") }) |> 
     dplyr::mutate_all(function(x){ base::replace(x, base::is.na(x), "'NULL'") }) |> 
     dplyr::distinct_all()
   
@@ -451,7 +451,7 @@ checkOmicSignature <- function(
   if(metadata$direction_type[1] %in% c("bi-directional", "categorical") && !"group_label" %in% base::colnames(signature)){
     base::stop("'signature' in OmicSignature object requires a 'group_label' variable as the direction of the signature is 'bi-directional' or 'categorical'")
   }else if(metadata$direction_type[1] %in% c("uni-directional") && !"group_label" %in% base::colnames(signature)){
-    signature <- signature |> dplyr::mutate(group_label = "")
+    signature <- signature |> dplyr::mutate(group_label = "All Features")
   }
   
   # Make sure required column fields do not have any empty values ####
@@ -481,7 +481,7 @@ checkOmicSignature <- function(
   if(!base::is.null(difexp) && metadata$direction_type[1] %in% c("bi-directional", "categorical") && !"group_label" %in% base::colnames(difexp)){
     base::stop("When the direction of the signature is bi-directional or categorical, 'difexp' in OmicSignature requires a 'group_label' variable.")
   }else if(!base::is.null(difexp) && metadata$direction_type[1] %in% c("uni-directional") && !"group_label" %in% base::colnames(difexp)){
-    difexp <- difexp |> dplyr::mutate(group_label = "")
+    difexp <- difexp |> dplyr::mutate(group_label = "All Features")
   }
   
   # Make sure required column fields do not have any empty values ####

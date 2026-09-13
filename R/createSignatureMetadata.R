@@ -20,6 +20,7 @@ createSignatureMetadata <- function(
   
   # Establish user connection ###
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
   
   # If yes, return whether it has difexp included ####
   has_difexp <- base::ifelse(!base::is.null(omic_signature$difexp), 1, 0)

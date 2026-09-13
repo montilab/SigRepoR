@@ -15,6 +15,7 @@ createCollectionMetadata <- function(
   
   # Establish user connection ###
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
   
   # Check if omic_signature is a valid R6 object ####
   # If yes, return whether it has difexp included ####
@@ -40,8 +41,7 @@ createCollectionMetadata <- function(
     function(c){
       #c=1;
       SigRepo::checkOmicSignature(
-        omic_signature = omic_sig_list[[c]],
-        check = TRUE
+        omic_signature = omic_sig_list[[c]]
       )
     }
   )

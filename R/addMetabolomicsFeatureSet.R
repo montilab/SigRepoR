@@ -46,6 +46,7 @@ addMetabolomicsFeatureSet <- function(
   SigRepo::print_messages(verbose = verbose)
 
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
 
   SigRepo::checkPermissions(
     conn = conn,

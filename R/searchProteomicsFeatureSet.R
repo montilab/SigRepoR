@@ -43,6 +43,7 @@ searchProteomicsFeatureSet <- function(
   
   # Establish user connection ###
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
   
   # Check user connection and permissions ####
   conn_info <- SigRepo::checkPermissions(
@@ -70,7 +71,7 @@ searchProteomicsFeatureSet <- function(
     feature_tbl <- SigRepo::lookup_table_sql(
       conn = conn, 
       db_table_name = ref_table, 
-      return_var = "feature_name", 
+      return_var = "*", 
       exclude_return_var = "feature_id",
       filter_coln_var = "feature_name",
       filter_coln_val = base::list("feature_name" = base::unique(feature_name)),

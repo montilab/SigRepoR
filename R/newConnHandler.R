@@ -229,6 +229,20 @@ stop_for_api_error <- function(
 # conn_init
 ############################################################
 
+#' @title conn_close
+#' @description Close a connection opened by conn_init(). Meant for
+#' on.exit() right after conn_init(), so error paths don't leak connections.
+#' Many functions also disconnect by hand before returning or stopping, and
+#' RMySQL errors on a second dbDisconnect(), so that error is swallowed here.
+#' @param conn A MySQL connection object from conn_init().
+#' @noRd
+conn_close <- function(conn){
+  base::invisible(base::tryCatch(
+    base::suppressWarnings(DBI::dbDisconnect(conn)),
+    error = function(e) FALSE
+  ))
+}
+
 #' @title conn_init
 #' @description Initiate a remote database connection
 #' @param conn_handler Optional handler from newConnHandler().
