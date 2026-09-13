@@ -174,6 +174,53 @@ delete_table_sql <- function(
   
 }
 
+#' Build the WHERE clause lookup_table_sql() sends to the database
+#'
+#' Every filter compares the bare column, `col IN ('a', 'b')`. Wrapping the
+#' column as `trim(lower(col))` stops MySQL from using its index: looking up
+#' one signature's features in signature_feature_set took 1.31 s as a full
+#' scan of 1.3 million rows, and 0.002 s through the index. Matching stays
+#' case-insensitive and ignores trailing spaces because every filtered text
+#' column uses a case-insensitive, PAD SPACE collation (utf8mb3_unicode_ci);
+#' values supplied by callers are still trimmed here. Values are quoted in one
+#' vectorised DBI::dbQuoteString() call -- quoting them one at a time cost
+#' 0.9 s per 15,000 feature ids.
+#'
+#' @param conn A DBI connection (or DBI::ANSI()) used to quote values.
+#' @param filter_coln_var Column names to filter on.
+#' @param filter_coln_val A named list of values per column in filter_coln_var.
+#' @param filter_var_by Logical operators joining the filters, length
+#'   length(filter_coln_var) - 1.
+#' @return The clause without the WHERE keyword.
+#' @noRd
+build_lookup_where_clause <- function(conn, filter_coln_var, filter_coln_val, filter_var_by = NULL){
+
+  clauses <- base::vapply(
+    base::seq_along(filter_coln_var),
+    function(s){
+      values <- base::trimws(base::as.character(filter_coln_val[[filter_coln_var[s]]]))
+      if(base::length(values) == 0){
+        # A filter column with zero values can never match a row -- emit an
+        # explicit always-false clause rather than invalid `IN ()` SQL. ####
+        return("1 = 0")
+      }
+      quoted_vals <- base::as.character(DBI::dbQuoteString(conn, values))
+      base::sprintf("%s IN (%s)", filter_coln_var[s], base::paste0(quoted_vals, collapse = ", "))
+    },
+    base::character(1)
+  )
+
+  if(base::length(clauses) > 1){
+    joined <- clauses[1]
+    for(s in base::seq_len(base::length(clauses) - 1)){
+      joined <- base::paste0(joined, " ", filter_var_by[s], " ", clauses[s + 1])
+    }
+    return(joined)
+  }
+
+  clauses
+}
+
 #' @title lookup_table_sql
 #' @description Look up a list of variables based on a particular variable 
 #' and its associated values in the database
@@ -253,34 +300,18 @@ lookup_table_sql <- function(
     # Create a where clause to look up values. Values are escaped with
     # DBI::dbQuoteString() (rather than pasted into the statement with manual
     # quotes) since filter_coln_val routinely carries caller-supplied search
-    # text -- unescaped interpolation here would be SQL injectable. ####
-    sql_clause <- base::seq_along(filter_coln_var) |>
-      purrr::map_chr(
-        function(s){
-          #s=1;
-          values <- base::trimws(base::tolower(filter_coln_val[[filter_coln_var[s]]]))
-          if(base::length(values) == 0){
-            # A filter column with zero values can never match a row --
-            # emit an explicit always-false clause. (A callable with an
-            # empty value vector -- e.g. from an off-by-one `1:nrow(x)`
-            # elsewhere -- would otherwise produce invalid `IN ()` SQL.)
-            clause <- "1 = 0"
-          }else{
-            quoted_vals <- base::vapply(
-              values,
-              function(v) base::as.character(DBI::dbQuoteString(conn, v)),
-              character(1)
-            )
-            clause <- base::sprintf("trim(lower(%s)) IN (%s)", filter_coln_var[s], base::paste0(quoted_vals, collapse = ", "))
-          }
-          if(s < base::length(filter_coln_var)){
-            clause <- base::paste0(clause, " ", filter_var_by[s], " ")
-          }
-          return(clause)
-        }
-      ) |> base::paste0(collapse="")
-
-    where_clause <- base::paste0("WHERE ", sql_clause)
+    # text -- unescaped interpolation here would be SQL injectable. Columns
+    # are compared bare so MySQL can use their indexes; see
+    # build_lookup_where_clause(). ####
+    where_clause <- base::paste0(
+      "WHERE ",
+      build_lookup_where_clause(
+        conn = conn,
+        filter_coln_var = filter_coln_var,
+        filter_coln_val = filter_coln_val,
+        filter_var_by = filter_var_by
+      )
+    )
     
   }
   
