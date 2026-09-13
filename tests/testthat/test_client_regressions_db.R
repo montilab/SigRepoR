@@ -105,16 +105,17 @@ test_that("searchGeneticVariantsFeatureSet searches by feature_name (#205)", {
   test_conn <- skip_unless_test_database()
   variant_name <- unique_name("rs")
 
-  SigRepo::addGeneticVariantsFeatureSet(
-    conn_handler = test_conn,
-    feature_set = base::data.frame(
-      feature_name = variant_name, chromosome = "1", position = 12345L,
-      annotation = "SigRepo regression test", organism = "Homo sapiens", is_current = 1,
-      stringsAsFactors = FALSE
-    ),
-    verbose = FALSE
-  )
+  # Seeded with SQL rather than addGeneticVariantsFeatureSet(), which needs the
+  # SigRepo admin role; CI's test user is not an admin. The hashkey matches
+  # createHashKey(). ####
+  inserted <- db_execute(test_conn, base::sprintf(
+    "INSERT INTO genetic_variants_features (feature_name, chromosome, position, annotation, organism_id, is_current, feature_hashkey)
+     SELECT '%s', '1', 12345, 'SigRepo regression test', organism_id, 1, MD5(LOWER(CONCAT('%s', organism_id)))
+     FROM organisms WHERE organism = 'Homo sapiens'",
+    variant_name, variant_name
+  ))
   on.exit(db_execute(test_conn, base::sprintf("DELETE FROM genetic_variants_features WHERE feature_name = '%s'", variant_name)), add = TRUE)
+  testthat::skip_if(inserted == 0, "the test database has no Homo sapiens organism")
 
   found <- SigRepo::searchGeneticVariantsFeatureSet(
     conn_handler = test_conn,
