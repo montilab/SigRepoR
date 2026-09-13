@@ -53,6 +53,7 @@ addOrganism <- function(
   
   # Establish user connection ###
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
   
   # Check user connection and permission ####
   conn_info <- SigRepo::checkPermissions(

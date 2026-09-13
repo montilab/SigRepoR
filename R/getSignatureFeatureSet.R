@@ -26,6 +26,7 @@ getSignatureFeatureSet <- function(
   SigRepo::print_messages(verbose = verbose)
 
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
 
   conn_info <- SigRepo::checkPermissions(
     conn = conn,

@@ -32,6 +32,7 @@ addSignatureWithID <- function(
   
   # Establish user connection ###
   conn <- SigRepo::conn_init(conn_handler)
+  on.exit(conn_close(conn), add = TRUE)
   
   # Check user connection and permission ####
   conn_info <- SigRepo::checkPermissions(
@@ -125,7 +126,7 @@ addSignatureWithID <- function(
   ) 
   
   # Put difexp back to its original form
-  if(metadata_tbl$has_difexp[1] == TRUE && check_difexp == TRUE){
+  if(base::as.numeric(metadata_tbl$has_difexp[1]) == 1 && check_difexp == TRUE){
     # Extract difexp from omic_signature ####
     difexp <- omic_signature$difexp
     # Save difexp to local storage ####
