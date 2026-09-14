@@ -32,6 +32,16 @@
 #' told apart as \code{"name (id N)"}. Supplied objects keep their list
 #' names, or fall back to their metadata \code{signature_name}.
 #'
+#' The rank-based methods rank each ranking signature's difexp table by
+#' \code{p_value_col}. Stored tables do not all name that column the same way,
+#' so a ranking signature whose table has no \code{p_value_col} is ranked by
+#' its \code{pvalue} column, the same raw p-values under another name. A
+#' table with neither is ranked by \code{adj_p_col}, and a warning names those
+#' signatures: adjustment keeps the order of the p-values, so KS results stay
+#' close to a raw p-value ranking, but GSEA scores can shift. This is done on
+#' copies; nothing is written to the database and supplied objects are not
+#' modified.
+#'
 #' Everything else -- cutoff validation, label pairing, the comparison itself
 #' and its warnings and errors -- is
 #' \code{OmicSignature::compare_omic_signatures()}'s, unchanged. The value is
@@ -68,7 +78,9 @@
 #' @param feature_col Column containing feature identifiers.
 #' @param score_col Column containing scores in signature and difexp tables.
 #' @param adj_p_col Column containing adjusted p-values in difexp tables.
-#' @param p_value_col Column containing p-values used to rank difexp tables.
+#' @param p_value_col Column containing raw p-values used to rank difexp
+#'   tables. A ranking signature without it is ranked by a \code{pvalue}
+#'   column instead, or failing that by \code{adj_p_col}, with a warning.
 #' @param group_col Column containing phenotype group labels.
 #' @param adjust Logical; adjust p-values within each returned comparison.
 #' @param p_adjust_method Multiple-testing correction method.
@@ -233,6 +245,16 @@ compareSignatures <- function(
     )
   }
 
+  # The rank-based methods rank the ranking side's difexp tables by p-value:
+  # the second list, or the first list itself in a self-comparison.
+  if (method %in% c("ks_rank", "ks_score", "ks", "gsea")) {
+    if (two_lists) {
+      sig_list2 <- fillRankingPValues(sig_list2, p_value_col = p_value_col, adj_p_col = adj_p_col)
+    } else {
+      sig_list1 <- fillRankingPValues(sig_list1, p_value_col = p_value_col, adj_p_col = adj_p_col)
+    }
+  }
+
   SigRepo::verbose(base::sprintf(
     "Comparing %d signature(s)%s with method '%s'.\n",
     base::length(sig_list1),
@@ -291,6 +313,57 @@ cleanCompareRequest <- function(x) {
   x <- base::trimws(x)
   x <- x[!base::is.na(x) & x != ""]
   base::unique(x)
+}
+
+
+#' Give ranking signatures the p-value column compare_omic_signatures() ranks by
+#'
+#' compare_omic_signatures() stops when a ranking signature's difexp table has
+#' no \code{p_value_col}. Many stored tables name the raw p-value
+#' \code{pvalue}, and some keep only adjusted p-values. A table without
+#' \code{p_value_col} gets it filled from \code{pvalue} when present, which is
+#' the same quantity, and otherwise from \code{adj_p_col}, with a warning
+#' naming those signatures: adjustment keeps the order of the p-values, which
+#' is what the ranking uses, but GSEA also uses their size. Tables with none
+#' of these are left for compare_omic_signatures() to report.
+#'
+#' Changed signatures are copies, so the caller's objects are untouched.
+#'
+#' @param sig_list Named list of OmicSignature objects on the ranking side.
+#' @param p_value_col The raw p-value column compare_omic_signatures() ranks by.
+#' @param adj_p_col The adjusted p-value column to fall back to.
+#' @return \code{sig_list}, with copies in place of the signatures filled in.
+#' @noRd
+fillRankingPValues <- function(sig_list, p_value_col, adj_p_col) {
+  fell_back <- base::character()
+  for (i in base::seq_along(sig_list)) {
+    difexp <- sig_list[[i]]$difexp
+    if (base::is.null(difexp) || p_value_col %in% base::colnames(difexp)) {
+      next
+    }
+    source_col <- base::intersect(c("pvalue", adj_p_col), base::colnames(difexp))[1]
+    if (base::is.na(source_col)) {
+      next
+    }
+    difexp[[p_value_col]] <- difexp[[source_col]]
+    filled <- sig_list[[i]]$clone(deep = TRUE)
+    filled$difexp <- difexp
+    sig_list[[i]] <- filled
+    if (source_col == adj_p_col) {
+      fell_back <- c(fell_back, base::names(sig_list)[i])
+    }
+  }
+
+  if (base::length(fell_back) > 0) {
+    base::warning(
+      "\nRanking by '", adj_p_col, "' for signature(s) whose difexp table has no '", p_value_col,
+      "' or 'pvalue' column: ", base::paste(fell_back, collapse = ", "), ".\n",
+      "Adjusted p-values keep the order of the raw p-values, so KS results stay close to a ",
+      "raw p-value ranking; GSEA scores can shift.\n",
+      call. = FALSE
+    )
+  }
+  sig_list
 }
 
 
