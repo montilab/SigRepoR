@@ -85,7 +85,9 @@ form given to fetched signatures that share a name.}
 
 \item{adj_p_col}{Column containing adjusted p-values in difexp tables.}
 
-\item{p_value_col}{Column containing p-values used to rank difexp tables.}
+\item{p_value_col}{Column containing raw p-values used to rank difexp
+tables. A ranking signature without it is ranked by a \code{pvalue}
+column instead, or failing that by \code{adj_p_col}, with a warning.}
 
 \item{group_col}{Column containing phenotype group labels.}
 
@@ -147,6 +149,16 @@ once. Fetched signatures are named by their \code{signature_name}; because
 names are only unique per user, fetched signatures that share a name are
 told apart as \code{"name (id N)"}. Supplied objects keep their list
 names, or fall back to their metadata \code{signature_name}.
+
+The rank-based methods rank each ranking signature's difexp table by
+\code{p_value_col}. Stored tables do not all name that column the same way,
+so a ranking signature whose table has no \code{p_value_col} is ranked by
+its \code{pvalue} column, the same raw p-values under another name. A
+table with neither is ranked by \code{adj_p_col}, and a warning names those
+signatures: adjustment keeps the order of the p-values, so KS results stay
+close to a raw p-value ranking, but GSEA scores can shift. This is done on
+copies; nothing is written to the database and supplied objects are not
+modified.
 
 Everything else -- cutoff validation, label pairing, the comparison itself
 and its warnings and errors -- is

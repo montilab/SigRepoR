@@ -194,7 +194,171 @@ test_that("column-name parameters are forwarded", {
   expect_error(run(method = "overlap", score_col = "nope"), "nope")
   expect_error(run(method = "overlap", adj_p_col = "nope"), "nope")
   expect_error(run(method = "overlap", group_col = "nope"), "nope")
-  expect_error(run(method = "ks_rank", p_value_col = "nope"), "nope")
+  # A missing p-value column falls back to adj_p, and the warning names it.
+  expect_warning(run(method = "ks_rank", p_value_col = "nope"), "nope")
+})
+
+## The ranking p-value column ####
+
+# A copy of `sig` whose difexp table has been changed by `edit`, leaving the
+# original object untouched.
+edit_difexp <- function(sig, edit){
+  copy <- sig$clone(deep = TRUE)
+  copy$difexp <- edit(copy$difexp)
+  copy
+}
+
+drop_cols <- function(cols){
+  function(difexp) difexp[, !base::colnames(difexp) %in% cols, drop = FALSE]
+}
+
+# adj_p in reverse p-value order, so ranking by adj_p and by p_value give
+# visibly different results.
+reverse_adj_p <- function(difexp){
+  difexp$adj_p <- 1 - difexp$p_value
+  difexp
+}
+
+test_that("a ranking signature that names its raw p-values pvalue is ranked by them, without a warning", {
+  sigs <- example_signatures()
+  renamed <- base::lapply(sigs[3:4], edit_difexp, edit = function(difexp){
+    base::names(difexp)[base::names(difexp) == "p_value"] <- "pvalue"
+    difexp
+  })
+
+  expect_warning(
+    wrapped <- SigRepo::compareSignatures(
+      omic_signatures = sigs[1:2], omic_signatures2 = renamed, method = "ks_rank", min_features = 3, max_feature = 10
+    ),
+    regexp = NA
+  )
+  direct <- OmicSignature::compare_omic_signatures(
+    sig_list1 = sigs[1:2], sig_list2 = sigs[3:4], method = "ks_rank", min_features = 3, max_feature = 10
+  )
+  expect_identical(wrapped, direct)
+})
+
+test_that("a ranking signature with only adj_p is ranked by adj_p, with a warning naming it", {
+  sigs <- example_signatures()
+  adj_only <- edit_difexp(edit_difexp(sigs$v3, reverse_adj_p), drop_cols("p_value"))
+
+  expect_warning(
+    wrapped <- SigRepo::compareSignatures(
+      omic_signatures = sigs[1:2], omic_signatures2 = base::list(v3 = adj_only), method = "ks_rank", min_features = 3, max_feature = 10
+    ),
+    "v3"
+  )
+  ranked_by_adj_p <- edit_difexp(adj_only, function(difexp){
+    difexp$p_value <- difexp$adj_p
+    difexp
+  })
+  direct <- OmicSignature::compare_omic_signatures(
+    sig_list1 = sigs[1:2], sig_list2 = base::list(v3 = ranked_by_adj_p), method = "ks_rank", min_features = 3, max_feature = 10
+  )
+  ranked_by_p <- OmicSignature::compare_omic_signatures(
+    sig_list1 = sigs[1:2], sig_list2 = base::list(v3 = edit_difexp(sigs$v3, reverse_adj_p)), method = "ks_rank", min_features = 3, max_feature = 10
+  )
+  expect_identical(wrapped, direct)
+  expect_false(base::identical(wrapped$comparisons, ranked_by_p$comparisons))
+})
+
+test_that("only the ranking signatures without raw p-values fall back to adj_p", {
+  sigs <- example_signatures()
+  adj_only <- edit_difexp(sigs$v3, drop_cols("p_value"))
+
+  warnings <- base::character()
+  wrapped <- base::withCallingHandlers(
+    SigRepo::compareSignatures(
+      omic_signatures = sigs[1:2], omic_signatures2 = base::list(v3 = adj_only, v4 = sigs$v4),
+      method = "ks_rank", min_features = 3, max_feature = 10
+    ),
+    warning = function(w){
+      warnings <<- c(warnings, base::conditionMessage(w))
+      base::invokeRestart("muffleWarning")
+    }
+  )
+
+  expect_length(warnings, 1)
+  expect_match(warnings, "v3")
+  expect_no_match(warnings, "v4")
+  expect_true(base::all(base::is.finite(wrapped$comparisons$level1_vs_level1$score)))
+})
+
+test_that("in a self-comparison the first list is the ranking side that falls back", {
+  sigs <- example_signatures()
+  adj_only <- edit_difexp(sigs$v1, drop_cols("p_value"))
+
+  expect_warning(
+    res <- SigRepo::compareSignatures(
+      omic_signatures = base::list(v1 = adj_only, v2 = sigs$v2), method = "ks_score", min_features = 3, max_feature = 10
+    ),
+    "v1"
+  )
+  expect_true(base::all(base::is.finite(res$comparisons$level1_vs_level1$score)))
+})
+
+test_that("gsea falls back to adj_p the same way", {
+  testthat::skip_if_not_installed("fgsea")
+  sigs <- example_signatures()
+  adj_only <- edit_difexp(sigs$v3, drop_cols("p_value"))
+
+  warnings <- base::character()
+  base::withCallingHandlers(
+    SigRepo::compareSignatures(
+      omic_signatures = sigs[1:2], omic_signatures2 = base::list(v3 = adj_only),
+      method = "gsea", min_features = 3, max_feature = 10, gsea_score = "ES", nproc = 1
+    ),
+    warning = function(w){
+      warnings <<- c(warnings, base::conditionMessage(w))
+      base::invokeRestart("muffleWarning")
+    }
+  )
+  expect_true(base::any(base::grepl("adj_p", warnings) & base::grepl("v3", warnings)))
+})
+
+test_that("the caller's OmicSignature objects are not modified", {
+  sigs <- example_signatures()
+  renamed <- edit_difexp(sigs$v3, function(difexp){
+    base::names(difexp)[base::names(difexp) == "p_value"] <- "pvalue"
+    difexp
+  })
+  adj_only <- edit_difexp(sigs$v4, drop_cols("p_value"))
+  before <- base::list(base::colnames(renamed$difexp), base::colnames(adj_only$difexp))
+
+  base::suppressWarnings(SigRepo::compareSignatures(
+    omic_signatures = sigs[1:2], omic_signatures2 = base::list(v3 = renamed, v4 = adj_only),
+    method = "ks_rank", min_features = 3, max_feature = 10
+  ))
+
+  expect_identical(base::list(base::colnames(renamed$difexp), base::colnames(adj_only$difexp)), before)
+})
+
+test_that("an overlap comparison never looks for a p-value column", {
+  sigs <- example_signatures()
+  adj_only <- base::lapply(sigs[1:2], edit_difexp, edit = drop_cols("p_value"))
+
+  expect_warning(
+    wrapped <- SigRepo::compareSignatures(omic_signatures = adj_only, method = "overlap", min_features = 3, max_feature = 10),
+    regexp = NA
+  )
+  expect_identical(wrapped, OmicSignature::compare_omic_signatures(adj_only, method = "overlap", min_features = 3, max_feature = 10))
+})
+
+test_that("a ranking signature with neither raw nor adjusted p-values still errors", {
+  sigs <- example_signatures()
+  # OmicSignature requires a difexp table to keep one of p_value, q_value or
+  # adj_p, so the only table with neither p_value nor adj_p has q_value.
+  no_p <- edit_difexp(sigs$v3, function(difexp){
+    difexp$q_value <- difexp$adj_p
+    drop_cols(c("p_value", "adj_p"))(difexp)
+  })
+
+  expect_error(
+    SigRepo::compareSignatures(
+      omic_signatures = sigs[1:2], omic_signatures2 = base::list(v3 = no_p), method = "ks_rank", min_features = 3, max_feature = 10
+    ),
+    "p_value"
+  )
 })
 
 test_that("gsea parameters and extra fgsea arguments are forwarded", {
