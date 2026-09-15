@@ -26,11 +26,15 @@ to view and access one's uploaded signature. Defaults to 'FALSE'.}
 \item{metabolomics_nomenclature}{Optional metabolite dictionary for
 metabolomics signatures. One of refmet_id, refmet, hmdb, smiles, or inchikey.}
 
-\item{verbose}{Logical;  whether or not to print the diagnostic messages. 
+\item{verbose}{Logical;  whether or not to print the diagnostic messages.
 Defaults to 'TRUE'.}
 }
 \description{
-Update a signature in the database
+Update a signature in the database. Only the signature's owner
+(the user who uploaded it) or an admin can update a signature; users who were
+given editor access with addUserToSignature() cannot. If the update fails
+part-way, the original signature is restored, including the users it is
+shared with and the collections it belongs to.
 }
 \examples{
 
@@ -38,17 +42,17 @@ Update a signature in the database
 
 # Create a connection handler
 conn_handler <- SigRepo::newConnHandler(
-  dbname = "sigrepo", 
-  host = "sigrepo.org", 
-  port = 3306, 
-  user = "your_username", 
+  dbname = "sigrepo",
+  host = "sigrepo.org",
+  port = 3306,
+  user = "your_username",
   password = "your_password"
 )
 
 # Update a signature in the database
 SigRepo::updateSignature(
-  conn_handler = conn_handler, 
-  signature_id = 20, 
+  conn_handler = conn_handler,
+  signature_id = 20,
   omic_signature = test_omic_signature
 )
 

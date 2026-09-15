@@ -219,3 +219,87 @@ test_that("client functions close their connections when they error (#206)", {
   expect_error(SigRepo::getSignature(conn_handler = unreachable_api, signature_id = signature$signature_id[1], verbose = FALSE))
   expect_equal(open_connection_count(), before)
 })
+
+# A users row for a second account, seeded with SQL because CI has a single
+# non-admin login. It never logs in; it only has to satisfy the foreign keys. ####
+seed_user <- function(test_conn, user_name){
+  db_execute(test_conn, base::sprintf(
+    "INSERT INTO users (user_name, user_password_hashkey, user_email, user_role, api_key, active, user_hashkey)
+     VALUES ('%1$s', MD5('%1$s'), 'regression@sigrepo.org', 'editor', MD5(CONCAT('%1$s', 'api')), 1, MD5(CONCAT('%1$s', 'user')))",
+    user_name
+  ))
+  user_name
+}
+
+# The rows an update must leave alone when it is refused or rolled back. ####
+signature_state <- function(test_conn, id){
+  base::list(
+    signature = db_query(test_conn, base::sprintf("SELECT signature_name, description, user_name, visibility, has_difexp, signature_hashkey FROM signatures WHERE signature_id = %s", id)),
+    features = db_query(test_conn, base::sprintf("SELECT feature_id, probe_id FROM signature_feature_set WHERE signature_id = %s ORDER BY feature_id, probe_id", id)),
+    access = db_query(test_conn, base::sprintf("SELECT user_name, access_type FROM signature_access WHERE signature_id = %s ORDER BY user_name", id)),
+    collections = db_query(test_conn, base::sprintf("SELECT collection_id FROM signature_collection_access WHERE signature_id = %s ORDER BY collection_id", id))
+  )
+}
+
+test_that("updateSignature refuses a user who only has editor access, and changes nothing (#214)", {
+  test_conn <- skip_unless_test_database()
+  features <- matchable_features(test_conn, "transcriptomics_features", "Mus musculus", 30)
+  name <- unique_name("shared_editor")
+  id <- upload_or_skip(test_conn, build_signature(name, features))
+  owner <- seed_user(test_conn, unique_name("owner"))
+
+  # Hand the signature to another owner; the test user keeps editor access ####
+  db_execute(test_conn, base::sprintf("UPDATE signatures SET user_name = '%s' WHERE signature_id = %s", owner, id))
+  db_execute(test_conn, base::sprintf("UPDATE signature_access SET access_type = 'editor' WHERE signature_id = %s AND user_name = '%s'", id, test_conn$user))
+  on.exit({
+    db_execute(test_conn, base::sprintf("UPDATE signatures SET user_name = '%s' WHERE signature_id = %s", test_conn$user, id))
+    db_execute(test_conn, base::sprintf("INSERT INTO signature_access (signature_id, user_name, access_type, access_sig_hashkey) VALUES (%s, '%s', 'owner', MD5('%s')) ON DUPLICATE KEY UPDATE access_type = 'owner'", id, test_conn$user, id))
+    delete_quietly(test_conn, id)
+    db_execute(test_conn, base::sprintf("DELETE FROM signature_access WHERE user_name = '%s'", owner))
+    db_execute(test_conn, base::sprintf("DELETE FROM users WHERE user_name = '%s'", owner))
+  }, add = TRUE)
+
+  before <- signature_state(test_conn, id)
+  expect_error(
+    SigRepo::updateSignature(conn_handler = test_conn, signature_id = id, omic_signature = build_signature(name, features[-(1:2)]), verbose = FALSE),
+    "permission to update"
+  )
+  expect_identical(signature_state(test_conn, id), before)
+})
+
+test_that("a failed updateSignature restores shared access and collection membership (#215)", {
+  test_conn <- skip_unless_test_database()
+  features <- matchable_features(test_conn, "transcriptomics_features", "Mus musculus", 30)
+  name <- unique_name("rollback")
+  id <- upload_or_skip(test_conn, build_signature(name, features))
+  viewer <- seed_user(test_conn, unique_name("viewer"))
+  collection_name <- unique_name("collection")
+
+  # Share with a viewer and put the signature in a collection ####
+  db_execute(test_conn, base::sprintf("INSERT INTO signature_access (signature_id, user_name, access_type, access_sig_hashkey) VALUES (%s, '%s', 'viewer', MD5('%s'))", id, viewer, viewer))
+  db_execute(test_conn, base::sprintf("INSERT INTO collection (collection_name, description, user_name, visibility, collection_hashkey) VALUES ('%1$s', 'regression', '%2$s', 0, MD5('%1$s'))", collection_name, test_conn$user))
+  collection_id <- db_query(test_conn, base::sprintf("SELECT collection_id FROM collection WHERE collection_name = '%s'", collection_name))$collection_id[1]
+  db_execute(test_conn, base::sprintf("INSERT INTO signature_collection_access (collection_id, signature_id, signature_collection_hashkey) VALUES (%s, %s, MD5('%s'))", collection_id, id, collection_name))
+  on.exit({
+    delete_quietly(test_conn, id)
+    db_execute(test_conn, base::sprintf("DELETE FROM signature_collection_access WHERE collection_id = %s", collection_id))
+    db_execute(test_conn, base::sprintf("DELETE FROM collection WHERE collection_id = %s", collection_id))
+    db_execute(test_conn, base::sprintf("DELETE FROM signature_access WHERE user_name = '%s'", viewer))
+    db_execute(test_conn, base::sprintf("DELETE FROM users WHERE user_name = '%s'", viewer))
+  }, add = TRUE)
+
+  before <- signature_state(test_conn, id)
+  testthat::expect_equal(base::nrow(before$access), 2)
+  testthat::expect_equal(base::nrow(before$collections), 1)
+
+  # Feature names the reference table cannot resolve make the update fail after it has started ####
+  unknown <- build_signature(name, base::sprintf("NOT_A_FEATURE_%02d", base::seq_along(features)))
+  result <- SigRepo::updateSignature(conn_handler = test_conn, signature_id = id, omic_signature = unknown, verbose = FALSE)
+
+  expect_s3_class(result, "data.frame")
+  after <- signature_state(test_conn, id)
+  expect_identical(after$signature, before$signature)
+  expect_identical(after$features, before$features)
+  expect_identical(after$access, before$access)
+  expect_identical(after$collections, before$collections)
+})
