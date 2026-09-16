@@ -303,7 +303,8 @@ The `SigRepo::updateSignature()` function allows users to update a specific sign
 __IMPORTANT NOTE:__ 
 
 - Users `MUST HAVE` an `editor` or `admin` account to use this function. 
-- Users can `ONLY UPDATE` their own uploaded signatures or were given an `editor` permission from its owner to access, retrieve, and edit their signatures.
+- Users can `ONLY UPDATE` their own uploaded signatures. Only a signature's owner or an `admin` can update it; being given `editor` permission to someone else's signature is not enough.
+- If an update fails part-way, the original signature is restored, including the users it is shared with and the collections it belongs to.
 - Users can `ONLY UPDATE` a signature one at a time.
 
 **For example:** If the `platform` information in the previous uploaded signature, `"Myc_reduce_mice_liver_24m_readme"`, is incorrect, and you wish to update the `platform` information with a correct value, e.g., `platform = "transcriptomics by single-cell RNA-seq"`. You can use the `SigRepo::updateSignature()` function as follows:
